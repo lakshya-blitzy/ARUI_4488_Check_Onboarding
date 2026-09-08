@@ -953,15 +953,18 @@ starts and when it ends; those lines come from the shell, not from the
 service.
 
 Stop that instance through the handle, validating the handle where it is used
-rather than where it was recorded. The guard below rejects an unset or
-non-positive value — which is what this fence finds when it is pasted into a
-shell that did not start the job — and `--` stops a value beginning with `-`
-from being read as an option. A shell reaps a background child as soon as it
-exits, measured here as the child's `/proc` entry being gone before any
-explicit `wait`, so `$!` names a live process only while that process lives; a
-handle kept past its instance's death is as stale as any other number. `wait`
-then reads the status the shell cached, which is how the signal that ended it
-gets reported:
+rather than where it was recorded. The guard below rejects an unset or empty
+value, a zero, and any value that is not all digits — a negative number among
+them — and `--` stops a value beginning with `-` from being read as an
+option. What it tests is the value and not its ownership, so evaluate the
+fence in the shell that started the job: a subshell of that shell inherits
+`server_pid`, and a shell handed the number holds one that looks identical,
+neither of which the guard can tell from the real handle. A shell reaps a
+background child as soon as it exits, measured here as the child's `/proc`
+entry being gone before any explicit `wait`, so `$!` names a live process only
+while that process lives; a handle kept past its instance's death is as stale
+as any other number. `wait` then reads the status the shell cached, which is
+how the signal that ended it gets reported:
 
 ```bash
 case $server_pid in
@@ -979,6 +982,20 @@ Observed output — 143 is 128 plus signal 15, the default `SIGTERM`:
 ```text
 stopped, wait status 143
 ```
+
+That 143 is also the sign that the status was read where the child belongs.
+The signal is delivered from any shell the handle reaches — the service stops,
+and the starting shell's own later `wait` still returns 143 — but a shell that
+does not own the child cannot report the signal's status: measured as `-1` from
+a command substitution that captures the fence's output, and as `127`, with
+bash's own `wait: pid N is not a child of this shell`, from a parenthesised
+subshell, from a pipeline segment, and from a second shell given the number.
+`stopped` is printed once `kill` returns, whatever `wait` reports after it, so
+read the status rather than the word: a status other than 143 says where the
+status was read, not that the service is still running. Where that output has
+to be captured, redirect it in the shell that started the job — a redirection
+is not a subshell, and was measured to keep the 143 — and confirm the end state
+with the status check below.
 
 **No handle left: identify the process before signalling it.** When the shell
 that started it is gone and no supervisor holds it, the PID has to come from
