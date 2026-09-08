@@ -9,9 +9,9 @@
  */
 
 /**
- * Node.js core HTTP module - the sole `require` in this file and this project's
- * only dependency. It ships with the runtime, so there is no install step: no
- * manifest, no lockfile and no third-party package.
+ * Node.js core HTTP module and this file's sole `require`. Installing Node.js is
+ * a machine prerequisite; this module ships with it, so no project dependency
+ * install exists: no `npm install`, manifest, lockfile or third-party package.
  * @constant {module:http}
  */
 const http = require('http');
