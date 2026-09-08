@@ -18,7 +18,7 @@ const http = require('http');
 
 /**
  * Contract of the inline `'request'` listener passed to `http.createServer`.
- * The handler is unconditional: for every request the runtime dispatches to it
+ * The handler is unconditional: for every request the runtime dispatches to it,
  * it assigns status `200`, sets `Content-Type: text/plain` and writes the same
  * fourteen bytes - `Hello, World!` and a newline. Method, path, query, headers
  * and body are never inspected; there is no routing, no `404` or `405`, and no
@@ -33,8 +33,8 @@ const http = require('http');
  * cached at one-second granularity on Node.js v22.23.2. The invariants are the
  * application-controlled status, media type and fourteen payload bytes.
  * @callback RequestHandler
- * @param {http.IncomingMessage} req Inbound request, accepted because the
- *   runtime supplies it but never inspected; the reply does not depend on it.
+ * @param {http.IncomingMessage} req Supplied by the runtime, never inspected:
+ *   the status, media type and payload the handler writes do not depend on it.
  * @param {http.ServerResponse} res Response being written: the status, then the
  *   one header, then the body, ended by the handler.
  * @returns {void} Nothing is returned; the reply is delivered by ending `res`.

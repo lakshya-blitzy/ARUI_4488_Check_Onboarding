@@ -2,9 +2,9 @@
 
 A minimal HTTP service. One Node.js `http` listener, bound to the IPv4 loopback
 interface, answers every request the runtime dispatches to it with the same
-plain-text greeting. Fourteen lines of executable and structural source carry
-the whole program; the file holding them is annotated, so it reads longer than
-it acts.
+status, media type and greeting bytes — a body the runtime suppresses for
+`HEAD`. Fourteen lines of executable and structural source carry the whole
+program; the file holding them is annotated, so it reads longer than it acts.
 
 This document is the project's complete documentation: what the service does,
 how to run it, the contract it answers with, how it is deployed and operated,
@@ -816,7 +816,7 @@ annotated file as delivered.
 
 - **`server.js:L17` — `const http = require('http');`** The sole `require` in
   the project. It targets Node's built-in `http` module, which ships with the
-  runtime, so there is nothing to install.
+  runtime, so there is no package to install.
 - **`server.js:L52` — `const hostname = '127.0.0.1';`** The bind address, and
   the reason the service is reachable only from within its own network
   namespace.
@@ -1017,7 +1017,7 @@ identifying:
 # Exit status: 0, with that PID on stdout; 1 when nothing matches; 2 when
 # more than one does; 3 when the check itself could not run. Only status 0
 # is a signalling target; 2 and 3 are unanswered, not answers.
-verified_server_pid() {
+verified_server_pid() (
   target=$(readlink -f -- "$PWD/server.js") || return 3
   runtime=$(readlink -f -- "$(command -v node)") || return 3
   netns=$(readlink -- /proc/self/ns/net) || return 3
@@ -1059,7 +1059,7 @@ verified_server_pid() {
   esac
 
   printf '%s\n' "$found"
-}
+)
 ```
 
 Then signal only what the check confirmed. The two commands are one gated
@@ -1576,9 +1576,10 @@ does not, the difference is recorded under
   `Permissions-Policy`.
 - No compression and no content negotiation.
 
-What the four entries above leave in place — one constant public payload, no
-identity or permission check, and a loopback bind that is not authentication —
-is set out under [Not implemented](#not-implemented).
+What the four entries above on authentication and authorization, TLS, CORS and
+security headers leave in place — one constant public payload, no identity or
+permission check, and a loopback bind that is not authentication — is set out
+under [Not implemented](#not-implemented).
 
 **Process lifecycle.**
 
