@@ -21,9 +21,14 @@ fourteen bytes — `Hello, World!` followed by a newline (`server.js:L74` to
 (`server.js:L90`), which is the service's only readiness signal.
 
 **What it is not.** It is not a web framework, an API gateway or a routed
-application. There is no route table, no status code other than the one it
-assigns, no request parsing, no authentication, no TLS and no persistence. The
-full inventory is in [Limitations and Non-Goals](#limitations-and-non-goals).
+application. There is no route table, no status code the application assigns
+other than `200`, no application-level inspection of the request — method,
+path, query, headers and body are never read — no authentication, no TLS and
+no persistence. The runtime is a separate matter: it parses every inbound
+request and can answer one itself without the application taking part, which
+is what an unrecognized method drawing a parser-generated `400` demonstrates
+under [Selected exceptional cases](#selected-exceptional-cases). The full
+inventory is in [Limitations and Non-Goals](#limitations-and-non-goals).
 
 **Terminology.** One term per concept throughout this document, matching the
 contract names recorded in the source:
@@ -36,9 +41,12 @@ contract names recorded in the source:
   (`server.js:L52`): the listener accepts connections only from within its own
   network namespace.
 
-The request and network path below shows the four dispositions the Node.js HTTP
-parser applies to an inbound request. Two of them reach the request listener,
-and only one of those two puts a body on the wire.
+The request and network path below shows four measured dispositions of an
+inbound request, selected because each one is observable to a caller of this
+service. They are not a complete account of the Node.js HTTP parser, which
+follows further paths of its own that lie outside the contract this project
+owns. Two of the four reach the request listener, and only one of those two
+puts a body on the wire.
 
 ```mermaid
 flowchart LR
@@ -95,12 +103,23 @@ Every command in this document is POSIX shell, verified on GNU/Linux with bash
 platform-specific, only the Node.js runtime and its core `http` module. Nothing
 is claimed about platforms that were not tested.
 
-Two places a Windows or non-bash reader must adapt:
+Two places a Windows or non-bash reader must adapt. Each substitution has to
+reach the same result as the POSIX form it replaces, and that result is what to
+check it against:
 
 - Stopping the process uses `Ctrl+C` in the foreground, or `taskkill` rather
-  than a POSIX signal.
+  than a POSIX signal. Expected result: the process exits, and a process lookup
+  afterwards finds no matching service process — the same end state the `kill`
+  step in [Start, stop and restart](#start-stop-and-restart) reaches.
 - The byte-count and process-lookup one-liners (`wc -c` and
-  `ps -eo pid,cmd`) have no direct `cmd` or PowerShell equivalent.
+  `ps -eo pid,cmd`) have no direct `cmd` or PowerShell equivalent. Expected
+  results: the byte-count substitute reports `14` for the response payload, as
+  in [Verify the service](#verify-the-service), and the process-lookup
+  substitute reports one matching PID while the service runs and no match once
+  it has stopped.
+
+Those results are the requirement each substitute has to meet. No output is
+quoted for the substitutes themselves, because they were not run here.
 
 ### Node.js runtime
 
@@ -110,21 +129,25 @@ Check what is installed:
 node --version
 ```
 
-It prints the version installed on the machine. No particular value is
-required, because the project declares none — which is why the following two
-facts are deliberately kept separate:
+It prints the version installed on the machine. The project declares no numeric
+Node.js version requirement, which is not the same as every version working:
+the source does need particular language and library features. That is why the
+following two facts are deliberately kept separate:
 
-- **The support floor** is what the source needs: ES2015 syntax (arrow
-  functions and template literals), CommonJS `require`, and the core `http`
-  module. That is everything the fourteen lines use.
+- **The support floor** is what the source needs: ES2015 syntax (the arrow
+  functions at `server.js:L73` and `server.js:L89`, the template literal at
+  `server.js:L90`), CommonJS `require` (`server.js:L17`), and the core `http`
+  module. That is everything the fourteen original executable and structural
+  lines of source use, and a runtime providing all three can run them.
 - **The verification baseline** is Node.js v22.23.2. Every observed output
   reproduced in this document was captured on it.
 
 The project declares no supported range. There is no `package.json` and
 therefore no `engines` field, and no `.nvmrc`, `.node-version` or
 `.tool-versions`. This document consequently states no minimum, no maximum and
-no range, because the project has never declared one. Install the runtime from
-[nodejs.org](https://nodejs.org/).
+no range, because the project has never declared one: use a runtime that
+provides the three features in the support floor above. Install the runtime
+from [nodejs.org](https://nodejs.org/).
 
 ### A free TCP port 3000
 
@@ -165,9 +188,19 @@ cd ARUI_4488_Check_Onboarding
 Expect a new `ARUI_4488_Check_Onboarding` directory holding exactly two tracked
 files, `server.js` and this document. There is nothing further to fetch.
 
-Or copy `server.js` alone into any directory. That is legitimate here: the file
-has no manifest, no sibling files and no relative imports, so it is
-self-sufficient.
+Or copy `server.js` alone into the directory you want to run it from. That is
+legitimate here: at runtime the file needs no sibling file, no manifest, no
+third-party package and no relative import, so it is self-sufficient. This
+document is a sibling file, and the delivered source points at it with
+`@see README.md`, but it is documentation rather than a runtime dependency —
+the service runs without it.
+
+Keep the pair together anyway, wherever you keep it: only `server.js` has to
+sit in the directory it runs from, and before replacing either file keep a copy
+of both as they stand. That copy is version-matched, and it is what the
+copied-file procedure in [Rollback and recovery](#rollback-and-recovery)
+restores from: this path carries no revision history, so a pair that was never
+kept cannot be recovered.
 
 ### Run the service
 
@@ -219,11 +252,13 @@ Content-Length: 14
 Hello, World!
 ```
 
-Two of those fields are set by the application: the `200` status line
-(`server.js:L74`) and `Content-Type` (`server.js:L75`). The rest are generated
-by the runtime, and `Date` in particular is a timestamp that varies between
-calls. [Status and header attribution](#status-and-header-attribution)
-separates them field by field.
+Three parts of that response come from the application: the `200` status line
+(`server.js:L74`), the `Content-Type` header (`server.js:L75`) and the 14-byte
+body written by `res.end` (`server.js:L76`). The other headers shown —
+`Content-Length`, `Date`, `Connection` and `Keep-Alive` — are generated by the
+runtime, and `Date` is a timestamp that may vary between calls.
+[Status and header attribution](#status-and-header-attribution) separates them
+field by field.
 
 Count the payload:
 
@@ -283,7 +318,9 @@ The five measured cases:
 
 The source sets exactly one status code and exactly one response header.
 `res.statusCode` (`server.js:L74`) writes the status line, which is not a
-header. Everything else on the wire is added by the runtime.
+header. The application also supplies the payload: `res.end`
+(`server.js:L76`) writes the 14 body bytes. Every other header shown below is
+added by the runtime.
 
 | Response field   | Set by      | Value or origin                    |
 | ---------------- | ----------- | ---------------------------------- |
@@ -291,13 +328,13 @@ header. Everything else on the wire is added by the runtime.
 | `Content-Type`   | Application | `text/plain` (`server.js:L75`)     |
 | Body             | Application | 14 bytes (`server.js:L76`)         |
 | `Content-Length` | Runtime     | Derived; absent on a `HEAD` reply  |
-| `Date`           | Runtime     | Timestamp, varies between calls    |
+| `Date`           | Runtime     | Timestamp; may vary between calls  |
 | `Connection`     | Runtime     | Keep-alive negotiation             |
 | `Keep-Alive`     | Runtime     | Keep-alive negotiation             |
 
 ### Baseline requests
 
-A `GET`, reduced to the two application-controlled fields:
+A `GET`, reduced to the application-controlled status and media type:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' \
@@ -322,8 +359,10 @@ curl -s -i -X POST --data 'ignored=payload' \
   http://127.0.0.1:3000/api/does-not-exist
 ```
 
-Observed response — method, path and body are all ignored, and the reply is
-the same as for `GET /`:
+Observed response — method, path and body are all ignored. The
+application-controlled fields match `GET /` exactly: status `200`,
+`Content-Type: text/plain` and the same 14 payload bytes. The runtime-generated
+headers below were captured as they arrived and may differ from another call:
 
 ```text
 HTTP/1.1 200 OK
@@ -341,9 +380,10 @@ Hello, World!
 Three cases where the observable result differs from a baseline `GET`. They are
 selected notes on runtime behaviour rather than a complete account of the
 Node.js HTTP parser: everything further down the protocol stack — an
-unsupported `Expect` value, `Expect: 100-continue`, malformed headers, socket
-timeouts and `Date` header caching among them — is runtime-defined and outside
-the contract this project owns.
+unsupported `Expect` value, which draws a runtime-generated `417`,
+`Expect: 100-continue`, malformed headers, socket timeouts and `Date` header
+caching among them — is runtime-defined and outside the contract this project
+owns.
 
 All three are driven from a raw socket, because `curl` cannot send an
 unrecognized method or an unhandled `CONNECT` usefully, and `curl -I` cannot
@@ -430,12 +470,18 @@ body bytes: 0
 
 None of the following exists in this service. The list matters because a single
 unconditional contract otherwise invites being read as a general-purpose API.
+Every entry below is an absence of application behaviour. The runtime still
+parses each inbound request and can generate a reply the application never
+sees, which is exactly what
+[Selected exceptional cases](#selected-exceptional-cases) records.
 
-- No routing and no route table; the path is never examined.
+- No routing and no route table; the application never examines the path.
 - No `404` and no `405`; the only status the application assigns is `200`.
-- No error responses and no error handling in the request path.
-- No request-body handling and no query-string handling; `req` is accepted but
-  never inspected.
+- No application-defined error responses and no error handling in the request
+  listener; runtime-generated replies such as the parser-level `400` remain
+  possible.
+- No application-level request parsing: no request-body handling and no
+  query-string handling; `req` is accepted but never inspected.
 - No authentication and no authorization.
 - No TLS; the listener speaks cleartext HTTP only.
 - No CORS headers.
@@ -457,11 +503,15 @@ is never read anywhere in the file.
 | `port`     | `3000`        | `server.js:L64` |
 
 `hostname` is the IPv4 loopback literal, and binding it confines the service to
-its own network namespace: a client on the same host reaches it, while a
-request to that host's routable address is refused. `port` is unprivileged, so
-no elevated identity is needed to bind it, and no fallback port exists — a
-collision ends the process. Both are passed to `server.listen`
-(`server.js:L89`) and interpolated into the readiness line
+the listener's own network namespace: a client inside that namespace reaches
+it, while a request to the host's routable address is refused, which
+[Exposure topology](#exposure-topology) demonstrates with a probe. A process on
+the same host but in a different network namespace has its own separate
+loopback, so it does not reach this socket either — that follows from how
+loopback binding and network namespaces work rather than from a measurement
+made here. `port` is unprivileged, so no elevated identity is needed to bind
+it, and no fallback port exists — a collision ends the process. Both are passed
+to `server.listen` (`server.js:L89`) and interpolated into the readiness line
 (`server.js:L90`).
 
 ### Environment variables have no effect
@@ -491,15 +541,35 @@ which is what proves both variables were ignored.
 
 ### Change a configuration value
 
-There is no configuration file and no runtime override, so the two literals are
-fixed at commit time. Changing either is a source edit:
+There is no configuration file and no runtime override: both values are fixed
+in the source, and every start reads them out of the `server.js` file on disk,
+so a process runs whatever values its own copy of the source holds. Changing
+either is therefore a source edit, and the edit plus a restart is what changes
+behaviour. Recording the change — in version control or otherwise — preserves
+it for the next copy, the next machine and the rollback procedure, but it is
+not what makes a process use the new value.
 
 1. Edit the literal in `server.js` — `hostname` at `server.js:L52` or `port` at
-   `server.js:L64`.
+   `server.js:L64`. The edited file is on disk immediately, so the next start
+   uses the new value whether or not it has been recorded anywhere.
 2. Restart the process; see
    [Start, stop and restart](#start-stop-and-restart). Nothing is re-read while
-   the process runs, because there is no configuration to re-read.
-3. Commit the edit, since the value is only durable once committed.
+   the process runs, because there is no configuration to re-read, so a running
+   instance keeps the old value until it is restarted.
+3. Record the change by the means your acquisition path provides. The two paths
+   are the ones in [Setup and Quick Start](#setup-and-quick-start), and they
+   differ here just as they do in
+   [Rollback and recovery](#rollback-and-recovery):
+   - **Cloned repository.** Commit the edit, with `git add server.js` and then
+     `git commit`. The commit is what puts the value into version control: it
+     fixes the value for anything cloned or checked out from that revision,
+     makes it shareable, and gives the rollback procedure a revision to
+     restore. Until it is committed the change lives only in that one working
+     tree: no revision holds it, and the rollback procedure cannot reach it.
+   - **Copied file.** There is no checkout to commit to, so nothing records the
+     edit for you. Keep a copy of the file as it stood before the change, and
+     re-copy the edited file to every directory it runs from; those copies are
+     the only record of the new value.
 4. Update this document, because the addresses and ports quoted throughout it
    are the literals from the source.
 
@@ -511,7 +581,9 @@ The module's most surprising property is that it does its work while it is
 being evaluated: `http.createServer` and `server.listen` both run at module
 scope, and nothing is exported. Requiring this file therefore starts a
 listener, which is why it is meant to be run with `node server.js` and not
-imported. The ordered interaction:
+imported. `server.listen` is asynchronous, though: it requests the bind and
+returns at once, so module evaluation finishes before the `'listening'` event
+fires and the readiness callback writes its line. The ordered interaction:
 
 ```mermaid
 sequenceDiagram
@@ -527,9 +599,10 @@ sequenceDiagram
     Mod->>Srv: http.createServer(RequestHandler) - L73
     Note over Mod,Srv: created but not yet bound
     Mod->>Srv: listen(port, hostname, ReadyCallback) - L89
+    Note over Mod,Srv: listen is asynchronous and returns at once
+    Note over CLI,Mod: synchronous evaluation ends,<br/>nothing is exported
     Srv-->>Mod: 'listening' - ReadyCallback invoked
     Mod->>CLI: stdout readiness line - L90
-    Note over CLI,Mod: evaluation ends, nothing is exported
     Cli->>Srv: dispatched request
     Srv->>Mod: RequestHandler(req, res)
     Mod-->>Cli: 200, text/plain, 14 bytes - L74 to L76
@@ -584,10 +657,15 @@ the bind. In the annotated file they survive as the blank lines at
 `server.js:L18`, `server.js:L65` and `server.js:L78`.
 
 Two properties follow from the whole and are easy to miss line by line. The
-request listener never reads `req`, so the reply cannot depend on the request.
-And because there are no exports and both `createServer` and `listen` run at
-module scope, there is no way to import this module without starting a
-listener.
+request listener never reads `req` (`server.js:L73` to `server.js:L77`), so
+the fields the application controls — the status, the media type and the
+fourteen payload bytes — are the same for every request the runtime dispatches
+to it. That independence belongs to the handler rather than to the whole
+reply: what reaches the wire still differs where the runtime intervenes, for
+`HEAD`, for a parser-rejected method and for `CONNECT`, as
+[API Documentation](#api-documentation) records. And because there are no
+exports and both `createServer` and `listen` run at module scope, there is no
+way to import this module without starting a listener.
 
 ## Deployment Guide
 
@@ -698,10 +776,11 @@ Could not connect to server
 `--noproxy '*'` is required. Without it an ambient `http_proxy` setting makes
 curl test the proxy rather than a direct connection.
 
-Three consequences follow from how loopback binding and network namespaces
-work. They are stated as platform behaviour, not as results measured here: the
-probe above stays inside one namespace and deliberately does not cross a
-namespace boundary.
+Three consequences, and the exclusivity statement that closes this section,
+follow from how loopback binding and network namespaces work. All four are
+stated as platform behaviour, not as results measured here — the probe above
+stays inside one namespace and deliberately does not cross a namespace
+boundary — except for the single sentence below that is marked as measured.
 
 - A **reverse proxy can** serve this application if it runs in the same network
   namespace. It connects to `127.0.0.1:3000` and listens itself on a routable
@@ -717,27 +796,45 @@ namespace boundary.
   bind address in the source, which is a code change and outside the scope of
   this document.
 
-The exclusive resource is the `127.0.0.1:3000` tuple within one network
-namespace. A second instance in the same namespace fails to bind, while
-separate namespaces on the same host can each run one instance.
+Platform behaviour as well, and the fourth claim the label above covers: the
+exclusive resource is the `127.0.0.1:3000` tuple within one network namespace
+rather than port 3000 across the host. That a second instance in the same
+namespace fails to bind is measured, and
+[A port collision ends the process](#a-port-collision-ends-the-process) shows
+the failure it produces. That separate namespaces on the same host can each
+run one instance follows from how namespaces work rather than from a probe:
+nothing measured here crosses a namespace boundary.
 
 ### Indicative sizing
 
-An allowance of roughly 128 MB of memory and one core is sufficient, and the
-process is single-threaded with no clustering. That is a measured
-idle-and-burst envelope rather than a capacity recommendation: the repository
-declares no deployment target, and this document sets no performance objective.
+Roughly 128 MB of memory and one core is an indicative measured idle-and-burst
+envelope on the verification baseline, and the process is single-threaded with
+no clustering. Those figures record what was observed rather than what a
+deployment needs: the repository declares no deployment target and this
+document sets no performance objective, so they are neither a capacity
+recommendation nor a guarantee for any workload.
 
 ### Post-deployment verification
 
 A short probe against an already-running instance. It neither starts nor stops
-anything. It is the only procedure in this document that takes parameters —
-substitute the host and port your instance is reachable on:
+anything. It is the only procedure in this document written with explicit
+angle-bracket placeholders; the absolute path in
+[Run the service](#run-the-service), the numeric PID in
+[Start, stop and restart](#start-stop-and-restart) and the revision identifier
+in [Rollback and recovery](#rollback-and-recovery) are values you supply too.
+Substitute the host and port your instance is reachable on for `<host>` and
+`<port>`:
 
 ```bash
-curl -i http://<host>:<port>/
-curl -s http://<host>:<port>/ | wc -c
+curl -i "http://<host>:<port>/"
+curl -s "http://<host>:<port>/" | wc -c
 ```
+
+The double quotes are part of the command. A POSIX shell reads an unquoted `<`
+or `>` as a redirection operator: without them curl receives only `http://`,
+and the shell redirects the command's streams to files named from the rest of
+the URL, creating or truncating one in the working directory. Keep the quotes
+after substituting real values; they stay harmless.
 
 Expect the status line `HTTP/1.1 200 OK` with `Content-Type: text/plain` from
 the first command, and `14` from the second.
@@ -763,42 +860,75 @@ cases restore `server.js` and `README.md` together: this document's line
 locators resolve against the annotated source, so reverting one without the
 other leaves citations pointing at lines that no longer hold what they claim.
 
-**Cloned repository.** List the revisions, then restore the pair from the one
-you want:
+**Cloned repository.** Not every revision holds the pair you want, so list the
+revisions, inspect the candidate, then restore it:
 
 ```bash
 git log --oneline
-git checkout HEAD~1 -- server.js README.md
+git show 7daf3c8:server.js | wc -l
+git show 7daf3c8:README.md | wc -c
+git checkout 7daf3c8 -- server.js README.md
 ```
 
-`HEAD~1` restores the pair as of the previous commit; substitute any revision
-identifier from the `git log --oneline` output to go further back. Expect
-`git status` to show both files staged for restoration afterwards.
+Expect `14` and `28` from the two inspection commands. That identifies
+`7daf3c8` as the pre-documentation pair — the unannotated fourteen-line
+`server.js` beside the placeholder document — and it is the baseline revision
+named in [Freshness](#freshness).
 
-**Copied file.** Restore the copy of both files you kept before the change.
-That requires having kept one, which is the reason to prefer the clone path for
-anything beyond a throwaway run.
+Substitute any other identifier from the `git log --oneline` output to reach a
+different pair, and inspect it the same way rather than counting positions back
+from the tip. Two revisions in this history are not the pair an operator is
+usually after: `a2f1b7e` holds the annotated `server.js` beside the placeholder
+document, so restoring it rolls this document back without restoring the
+pre-documentation source, and the initial commit predates `server.js` and
+cannot restore it at all.
 
-Both procedures finish with the probe in
-[Post-deployment verification](#post-deployment-verification) rather than with
-the restore command: a restored file is not yet a running service.
+`git status` afterwards stages only the files whose content differs from the
+working tree: both files where the selected revision differs in both, one file
+where it differs in one. Restoring `7daf3c8` over the documented pair stages
+both.
+
+**Copied file.** Restore the version-matched copy kept as described in
+[Obtain the source](#obtain-the-source), putting `server.js` back in the
+directory it runs from. This path carries no revision history, so a pair that
+was never kept cannot be restored — which is the reason to prefer the clone
+path for anything beyond a throwaway run.
+
+Neither procedure is finished at the restore command. A restored file is not
+running code: the runtime loads `server.js` once, when the process starts, so a
+process that is already running keeps serving what it loaded, and where no
+process is running there is nothing for a probe to reach. After either restore:
+
+1. Stop the running process; see
+   [Start, stop and restart](#start-stop-and-restart). Under load, that stop
+   drops in-flight keep-alive connections without draining them, as described
+   at the top of this section.
+2. Start the restored `server.js`; see [Run the service](#run-the-service).
+3. Wait for the single readiness line quoted there. It is the only readiness
+   signal this service has, so treat the restored instance as unavailable until
+   it appears.
+4. Run the probe in
+   [Post-deployment verification](#post-deployment-verification).
 
 There is no migration, no schema and no persisted artifact to reverse, so an
 operator should not look for one.
 
 ## Troubleshooting
 
-Two failure modes have been reproduced against this service. Each has a single
-cause and a single diagnostic, so they are listed here rather than drawn as a
-decision tree.
+Two failure modes have been reproduced against this service, and each is
+stated at the grain its reproduction reaches: both diagnostics below run on
+the host running the service, inside the same network namespace as the
+listener, and where a consequence extends past what they cover it is marked as
+platform behaviour. Each mode has a single cause and a single diagnostic, so
+they are listed here rather than drawn as a decision tree.
 
 ### A port collision ends the process
 
 Starting an instance while `127.0.0.1:3000` is already bound in the same
-network namespace terminates the new process. The bind failure arrives as an
-`'error'` event, and because the source registers no `'error'` listener the
-event goes unhandled: the runtime writes a stack trace to stderr and the
-process exits non-zero.
+network namespace terminates the process attempting that second bind. The bind
+failure arrives as an `'error'` event, and because the source registers no
+`'error'` listener the event goes unhandled: the runtime writes a stack trace
+to stderr and the process exits non-zero.
 
 Diagnostic — start it and read stderr:
 
@@ -848,17 +978,27 @@ in [Start, stop and restart](#start-stop-and-restart).
 Resolution: stop the incumbent as described in
 [Start, stop and restart](#start-stop-and-restart) and start again, or run the
 second instance in a separate network namespace, where `127.0.0.1:3000` is a
-different socket. Setting `PORT` does not help; see
+different socket. That separation is platform behaviour rather than a result
+measured here, on the same footing as the rest of
+[Exposure topology](#exposure-topology). Setting `PORT` does not help; see
 [Environment variables have no effect](#environment-variables-have-no-effect).
 
-### A request from another host is refused
+### A request to a non-loopback address is refused
 
-Any request to a non-loopback address is refused. The listener does not accept
-on a non-loopback address, not even one belonging to its own host. There is no
-partial state to inspect: the TCP connection never completes, so nothing
-reaches the application and nothing is logged.
+What has been reproduced is a request to the host's own routable address, made
+from inside the same network namespace as the listener: the connection is
+refused. The listener does not accept on a non-loopback address, not even one
+belonging to its own host. There is no partial state to inspect — the TCP
+connection never completes, so nothing reaches the application and nothing is
+logged.
 
-Diagnostic — probe both addresses and compare:
+A request originating on another host, or in another network namespace on this
+one, is refused for the same reason, but that is platform behaviour rather
+than a result measured here: the diagnostic below stays inside one namespace
+and never crosses a namespace boundary. What can and cannot reach a loopback
+listener is set out in [Exposure topology](#exposure-topology).
+
+Diagnostic — run both probes on the host running the service and compare:
 
 ```bash
 curl -s --noproxy '*' -m 3 -o /dev/null -w '%{http_code}\n' \
@@ -876,23 +1016,40 @@ response:
 000
 ```
 
-If both probes return `000` the service is not running at all: start it and
-check for the readiness line. If the loopback probe returns `200`, the service
-is working as written and the refusal is the loopback bind doing its job.
-Reaching the service from elsewhere is a question of exposure rather than a
-fault; see [Exposure topology](#exposure-topology).
+Two `000` results do not establish that no process is running. They establish
+only that nothing is reachable from the namespace you probed from, at the two
+addresses you probed — `127.0.0.1:3000` and the routable one. Three checks
+tell the cases apart: whether the process exists, using the `ps` lookup in
+[Start, stop and restart](#start-stop-and-restart); whether its bind
+succeeded, by reading stderr for the trace shown in
+[A port collision ends the process](#a-port-collision-ends-the-process); and
+whether it reported readiness, by looking for the startup line. An instance
+running in a different network namespace serves its own `127.0.0.1:3000` and
+is unreachable from yours, which looks identical at the probe.
+
+If the loopback probe returns `200`, the service is working as written and the
+refusal is the loopback bind doing its job. Reaching the service from
+elsewhere is a question of exposure rather than a fault; see
+[Exposure topology](#exposure-topology).
 
 ## Limitations and Non-Goals
 
 Everything below is absent by construction. Each is recorded as a fact about
-this service rather than left to be discovered.
+this service rather than left to be discovered. Each is also an absence of
+application behaviour: where the runtime supplies something the application
+does not, the difference is recorded under
+[Selected exceptional cases](#selected-exceptional-cases).
 
 **Request handling.**
 
-- No routing and no route table; the request path is never examined.
+- No routing and no route table; the application never examines the request
+  path.
 - No `404` and no `405`; the only status the application assigns is `200`.
-- No error responses and no error handling in the request path.
-- No request-body handling and no query-string handling.
+- No application-defined error responses and no error handling in the request
+  listener; runtime-generated replies such as the parser-level `400` remain
+  possible.
+- No application-level request parsing: no request-body handling and no
+  query-string handling.
 - No authentication and no authorization.
 - No TLS; the listener speaks cleartext HTTP only.
 - No CORS headers.
@@ -913,9 +1070,24 @@ this service rather than left to be discovered.
   readiness signal.
 - No request logging and no application error logging.
 - No metrics and no tracing.
+- No correlation identifiers; no request or trace identifier is generated,
+  read or propagated, so there is nothing by which one request could be
+  correlated across records.
+- No alerting hooks and no alerting surface; nothing notifies an operator, so
+  a failure is found by watching the process — its stdout and stderr, its exit
+  status, and whether it is still running.
 
 **Configuration and packaging.**
 
+- The bind address is fixed to the IPv4 loopback literal `127.0.0.1`
+  (`server.js:L52`): the listener accepts connections only from within its own
+  network namespace, no runtime override exists, and changing it is a source
+  edit. Reaching the service from outside that namespace is a question of
+  exposure — see [Exposure topology](#exposure-topology).
+- TCP port `3000` is fixed with no fallback (`server.js:L64`): nothing selects
+  another port when that one is already bound, the resulting bind failure is
+  fatal because no `'error'` listener is registered, and changing the port is
+  likewise a source edit.
 - No environment-variable configuration; `process.env` is never read.
 - No configuration file and no command-line arguments.
 - No `package.json`, no lockfile and no dependency beyond the runtime.
@@ -936,12 +1108,13 @@ this service rather than left to be discovered.
 Two facts, kept separate exactly as in [Node.js runtime](#nodejs-runtime):
 
 - **Support floor** — ES2015 syntax, CommonJS `require`, and the core `http`
-  module. That is everything the source uses.
+  module. That is everything the fourteen original executable and structural
+  lines of source use, and a runtime providing all three can run them.
 - **Verification baseline** — Node.js v22.23.2, on which every observed output
   in this document was captured.
 
-The project declares no supported version range, and this document invents
-none.
+The project declares no numeric version requirement and no supported range, and
+this document invents neither.
 
 ### License status
 
@@ -959,10 +1132,11 @@ and no checklist.
 ### Documentation ownership
 
 Documentation ownership is not assigned. There is no `CODEOWNERS` file, no
-contribution guide and no maintainer field anywhere in the repository. Git
-records a single author across the project's commits, which establishes past
-authorship rather than ongoing ownership, so no owner is named here. Assigning
-ownership is a decision for the project owner.
+contribution guide and no maintainer field anywhere in the repository, and
+those three absences are the whole basis for that statement. Commit history is
+not a substitute for them: it records who authored past changes, not who owns
+this document, so no owner is inferred from it and none is named here.
+Assigning ownership is a decision for the project owner.
 
 **Proposed practice, not policy in force.** The following needs the project
 owner's adoption before it can be treated as a rule: a change to `server.js`

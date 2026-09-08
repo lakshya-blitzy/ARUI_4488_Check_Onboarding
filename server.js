@@ -1,9 +1,9 @@
 /**
- * @file Minimal HTTP service: one Node.js `http` listener bound to the loopback
- * interface, answering every dispatched request with the same plain-text
- * greeting. Requiring this file is not side-effect free - `http.createServer`
- * and `server.listen` both run at module evaluation and nothing is exported, so
- * run it with `node server.js` instead of importing it.
+ * @file Minimal HTTP service: one Node.js `http` listener on the loopback bind.
+ * Its handler answers every dispatched request by assigning status `200`,
+ * setting `Content-Type: text/plain` and writing the same greeting bytes - a
+ * body the runtime suppresses for `HEAD`. Requiring this file builds and binds
+ * that listener at module evaluation and exports nothing: run `node server.js`.
  * @requires module:http
  * @see README.md
  */
@@ -24,14 +24,14 @@ const http = require('http');
  * and body are never inspected; there is no routing, no `404` or `405`, and no
  * error path.
  *
- * Dispatch is the runtime's decision, not the handler's, so that is not the same
- * as "every request gets a body": an unrecognized method draws a parser-level
- * `400 Bad Request` before the handler runs, `CONNECT` raises `'connect'` rather
- * than `'request'` and never reaches the handler, and `HEAD` runs the handler
- * unchanged while the runtime suppresses both the body and `Content-Length`.
- * Whole responses are not guaranteed identical between calls either, since the
- * runtime-generated `Date` is cached at one-second granularity; the invariants
- * are the application-controlled status, media type and fourteen payload bytes.
+ * Dispatch is the runtime's decision, so this is not the same as "every request
+ * gets a body": an unrecognized method draws a parser-level `400 Bad Request`
+ * before the handler runs, `CONNECT` raises `'connect'` and never reaches the
+ * handler, and `HEAD` runs the handler unchanged while the runtime suppresses
+ * the body and `Content-Length`. Whole-response identity is neither guaranteed
+ * nor excluded: runtime-generated headers can vary, and `Date` was observed
+ * cached at one-second granularity on Node.js v22.23.2. The invariants are the
+ * application-controlled status, media type and fourteen payload bytes.
  * @callback RequestHandler
  * @param {http.IncomingMessage} req Inbound request, accepted because the
  *   runtime supplies it but never inspected; the reply does not depend on it.
@@ -41,11 +41,11 @@ const http = require('http');
  */
 
 /**
- * Bind address: the IPv4 loopback literal, which confines the service to its own
- * network namespace - a client on the same host reaches it, while a request to
- * that host's routable address is refused. Fixed at authoring time and not
- * overridable at runtime: no environment variable is read, so `HOST` has no
- * effect, and there is no configuration file.
+ * Bind address: the IPv4 loopback literal, so the service is reachable only
+ * through this loopback bind, from clients in the listener's own network
+ * namespace; the listener accepts nothing through a routable interface. Fixed
+ * at authoring time and not overridable at runtime: no environment variable is
+ * read, so `HOST` has no effect, and there is no configuration file.
  * @constant {string}
  * @default
  */
@@ -78,10 +78,10 @@ const server = http.createServer((req, res) => {
 
 /**
  * Contract of the inline callback passed to `server.listen`, invoked once the
- * listener is bound and accepting connections. Its single stdout line is this
- * service's sole readiness indicator - there is no health endpoint to poll and
- * no further application output. A failed bind emits `'error'` instead, so this
- * callback never runs then and only a runtime stderr trace remains as evidence.
+ * listener is bound. Its single stdout line is the sole readiness indicator -
+ * there is no health endpoint, and the application logs nothing further. A
+ * failed bind emits `'error'` instead, so this callback never runs: no readiness
+ * line, a runtime stderr trace and a non-zero exit follow.
  * @callback ReadyCallback
  * @listens module:http~Server#event:listening
  * @returns {void} Nothing is returned; readiness is signalled by the log line.
